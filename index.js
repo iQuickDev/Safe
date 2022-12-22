@@ -1,11 +1,11 @@
 const aes = require('aes256')
 const tar = require('tar')
 const fs = require('fs')
+const Logger = require('./Logger.js')
 require('colors')
 const prompt = require('prompt')
 prompt.message = '  INPUT  '.bgMagenta
 prompt.delimiter = ''
-const Logger = require('./Logger.js')
 
 /* FLAGS
 *   -a <archive> <file1> <file2> <fileN>: adds a file to the archive
@@ -23,7 +23,8 @@ async function setPassword() {
             name: 'password',
             required: true,
             hidden: true,
-            message: " Password:".white
+            replace: '*',
+            message: " Password:".white,
         })).password
     } catch (e) {
         Logger.error("The program was forcefully closed")
@@ -43,8 +44,7 @@ function displayHelp() {
     console.log('  -h: view this help message\n'.green)
 }
 
-function checkArchive(archive)
-{
+function checkArchive(archive) {
     if (!fs.existsSync(archive)) {
         if (!fs.existsSync(`${archive}.tar.safe`)) {
             Logger.error('Archive does not exist'.red)
@@ -64,17 +64,14 @@ function checkArchive(archive)
 const functions = {
     c: function create(name, files) {
 
-        for (const file of [...files])
-        {   
-            if (!fs.existsSync(file))
-            {
+        for (const file of [...files]) {
+            if (!fs.existsSync(file)) {
                 files.splice(files.indexOf(file), 1)
                 Logger.warn(`File ${file} will be ignored because it does not exist`)
             }
         }
 
-        if (files.length == 0)
-        {
+        if (files.length == 0) {
             Logger.error('Archive could not be created because no files were selected')
             process.exit(1)
         }
@@ -105,61 +102,76 @@ const functions = {
 
         let decryptedArchive = aes.decrypt(settings.password, fs.readFileSync(archive))
         fs.writeFileSync(`${archive.replaceAll('.safe', '')}`, decryptedArchive)
-        
-        for (const file of [...files])
-        {   
-            if (!fs.existsSync(file))
-            {
+
+        for (const file of [...files]) {
+            if (!fs.existsSync(file)) {
                 files.splice(files.indexOf(file), 1)
                 Logger.warn(`File ${file} will be ignored because it does not exist`)
             }
         }
 
-        if (files.length == 0)
-        {
+        if (files.length == 0) {
             Logger.error('No file could be added because none was specified')
             process.exit(1)
         }
 
-        await tar.update({
+        tar.update({
             gzip: false,
             file: `${archive.replaceAll('.safe', '')}`
         }, files)
-        .then(async () => {
-            Logger.success(`Added ${files.toString()} to the archive ${archive.replaceAll('.tar.safe', '').bold}`)
-            fs.writeFileSync(`${archive}`, aes.encrypt(settings.password, fs.readFileSync(archive.replaceAll('.safe', ''))))
+            .then(async () => {
+                Logger.success(`Added ${files.toString()} to the archive ${archive.replaceAll('.tar.safe', '').bold}`)
+                fs.writeFileSync(`${archive}`, aes.encrypt(settings.password, fs.readFileSync(archive.replaceAll('.safe', ''))))
+                fs.unlinkSync(archive.replaceAll('.safe', ''))
+            })
+    },
+    e: async function extract(archive, destination) {
+        destination = destination[0]
+        archive = checkArchive(archive)
+
+        if (!destination) {
+            Logger.warn('No destination was specified, defaulting to the current directory')
+            destination = __dirname
+        }
+
+        if (!fs.existsSync(destination)) {
+            Logger.error('The provided destination does not exist')
+            process.exit(1)
+        }
+
+        if (!settings.password)
+            await setPassword()
+
+        let decryptedArchive = aes.decrypt(settings.password, fs.readFileSync(archive))
+        fs.writeFileSync(`${archive.replace('.safe', '')}`, decryptedArchive)
+
+        tar.extract({
+            file: archive.replace('.safe', ''),
+            cwd: destination
+        }).then(async () => {
+            Logger.success(`Extracted archive ${archive.replace('.tar.safe', '').bold} to ${destination}`)
             fs.unlinkSync(archive.replaceAll('.safe', ''))
         })
     },
-
-    e: async function extract(archive, destination) {
-        archive = checkArchive(archive)
-
-        if (!settings.password)
-        await setPassword()
-    },
-
     r: function remove() {
         console.log('called the remove function')
     },
-
     v: async function view(archive) {
         let files = []
         archive = checkArchive(archive)
 
         if (!settings.password)
-        await setPassword()
+            await setPassword()
 
         let decryptedArchive = aes.decrypt(settings.password, fs.readFileSync(archive))
 
-        fs.writeFileSync(archive.replace('.safe',''), decryptedArchive)
+        fs.writeFileSync(archive.replace('.safe', ''), decryptedArchive)
         await tar.list({
             strict: true,
-            file: archive.replace('.safe',''),
+            file: archive.replace('.safe', ''),
             onentry: entry => files.push(entry.path)
         }).catch(err => {
-            if (err.message.includes('base256'))
-            {
+            if (err.message.includes('base256')) {
                 Logger.error(`The password you've provided is invalid`)
                 process.exit(1)
             }
@@ -168,8 +180,7 @@ const functions = {
         })
 
         Logger.success(`Listing all archive contents for ${archive.replace('.tar.safe', '')}`)
-        for (const file of files)
-        {
+        for (const file of files) {
             Logger.view(file)
         }
 
@@ -179,7 +190,7 @@ const functions = {
 
 const possibleFlags = [
     { name: 'a', length: Infinity },
-    { name: 'e', length: 1 },
+    { name: 'e', length: 2 },
     { name: 'r', length: Infinity },
     { name: 'c', length: Infinity },
     { name: 'v', length: 1 },
@@ -227,13 +238,12 @@ const settings = {
     verbose: false
 }
 
-if (args.find(a => a.flag != 'p'))
-{
+if (args.find(a => a.flag != 'p')) {
     Object.assign(settings, {
         action: args.find(a => a.flag != 'p').flag
     })
 } else {
-    Logger.error('No action specified, only the password was provided'.red)
+    Logger.error('No action specified, only the password was provided')
     process.exit(1)
 }
 
@@ -253,4 +263,3 @@ let createdParams = args.find(arg => arg.flag == settings.action).params
 functions[settings.action](createdParams.shift(), createdParams)
 
 //todo: configure prompt
-//todo: better error messages
