@@ -2,14 +2,15 @@ const aes = require('aes256')
 const tar = require('tar')
 const fs = require('fs')
 const Logger = require('./Logger.js')
+const ArchiveManager = require('./ArchiveManager.js')
 require('colors')
 const prompt = require('prompt')
-prompt.message = '  INPUT  '.bgMagenta
+prompt.message = '  INPUT  '.bold.bgMagenta
 prompt.delimiter = ''
 
 /* FLAGS
 *   -a <archive> <file1> <file2> <fileN>: adds a file to the archive
-*   -e <archive>, <destination>: extracts the archive
+*   -e <archive> <destination>: extracts the archive
 *   -r <archive> <file1>: removes a file from the archive
 *   -c <name> <file1> <file2> <fileN>: creates an archive
 *   -v <archive>: view the contents of the archive
@@ -21,19 +22,33 @@ async function setPassword() {
     try {
         settings.password = (await prompt.get({
             name: 'password',
-            required: true,
             hidden: true,
             replace: '*',
             message: " Password:".white,
         })).password
+
+        if (!settings.password) {
+            Logger.error("Password cannot be blank")
+            await setPassword()
+        }
+
     } catch (e) {
         Logger.error("The program was forcefully closed")
         process.exit(1)
     }
+
+    // the following two lines avoid a line break
+
+    // move console cursor up
+    process.stdout.write('\033[1A')
+    // delete entire line
+    process.stdout.write('\033[1K')
+
+    // check this document for reference: https://www.csie.ntu.edu.tw/~r92094/c++/VT100.html
 }
 
 function displayHelp() {
-    console.log('Usage: safe [OPTION]... [FILE]...\n'.cyan)
+    console.log('Usage: safe <action> <arg1>, <arg2>...'.cyan)
     console.log('Options:'.yellow)
     console.log('  -a <archive> <file1> <file2> <fileN>: adds a file to the archive'.green)
     console.log('  -e <archive> <destination>: extracts the archive'.green)
@@ -42,23 +57,6 @@ function displayHelp() {
     console.log('  -v <archive>: view the contents of the archive'.green)
     console.log('  -p <password>: provide the archive password'.green)
     console.log('  -h: view this help message\n'.green)
-}
-
-function checkArchive(archive) {
-    if (!fs.existsSync(archive)) {
-        if (!fs.existsSync(`${archive}.tar.safe`)) {
-            Logger.error('Archive does not exist'.red)
-            process.exit(1)
-        }
-        archive += '.tar.safe'
-    }
-
-    if (!archive.endsWith('.tar.safe')) {
-        Logger.error("Archive is not encrypted or extension has been removed")
-        process.exit(1)
-    }
-
-    return archive
 }
 
 const functions = {
@@ -76,13 +74,10 @@ const functions = {
             process.exit(1)
         }
 
-        tar.create(
-            {
-                gzip: false,
-                file: `${name}.tar`
-            },
-            files
-        )
+        tar.create({
+            gzip: false,
+            file: `${name}.tar`
+        }, files)
             .then(async () => {
                 if (!settings.password)
                     await setPassword()
@@ -94,8 +89,7 @@ const functions = {
     },
 
     a: async function add(archive, files) {
-
-        archive = checkArchive(archive)
+        archive = ArchiveManager.checkIfExists(archive)
 
         if (!settings.password)
             await setPassword()
@@ -115,11 +109,18 @@ const functions = {
             process.exit(1)
         }
 
+        if (!(await ArchiveManager.isValid(archive)))
+        {
+            Logger.error(`The password you've provided is invalid`)
+            fs.unlinkSync(archive.replaceAll('.safe', ''))
+            process.exit(1)
+        }
+
         tar.update({
             gzip: false,
             file: `${archive.replaceAll('.safe', '')}`
         }, files)
-            .then(async () => {
+            .then(() => {
                 Logger.success(`Added ${files.toString()} to the archive ${archive.replaceAll('.tar.safe', '').bold}`)
                 fs.writeFileSync(`${archive}`, aes.encrypt(settings.password, fs.readFileSync(archive.replaceAll('.safe', ''))))
                 fs.unlinkSync(archive.replaceAll('.safe', ''))
@@ -127,7 +128,7 @@ const functions = {
     },
     e: async function extract(archive, destination) {
         destination = destination[0]
-        archive = checkArchive(archive)
+        archive = ArchiveManager.checkIfExists(archive)
 
         if (!destination) {
             Logger.warn('No destination was specified, defaulting to the current directory')
@@ -145,6 +146,13 @@ const functions = {
         let decryptedArchive = aes.decrypt(settings.password, fs.readFileSync(archive))
         fs.writeFileSync(`${archive.replace('.safe', '')}`, decryptedArchive)
 
+        if (!(await ArchiveManager.isValid(archive)))
+        {
+            Logger.error(`The password you've provided is invalid`)
+            fs.unlinkSync(archive.replaceAll('.safe', ''))
+            process.exit(1)
+        }
+
         tar.extract({
             file: archive.replace('.safe', ''),
             cwd: destination
@@ -153,39 +161,9 @@ const functions = {
             fs.unlinkSync(archive.replaceAll('.safe', ''))
         })
     },
-    r: function remove() {
-        console.log('called the remove function')
-    },
-    v: async function view(archive) {
-        let files = []
-        archive = checkArchive(archive)
+    r: async function remove(archive, files) {
 
-        if (!settings.password)
-            await setPassword()
-
-        let decryptedArchive = aes.decrypt(settings.password, fs.readFileSync(archive))
-
-        fs.writeFileSync(archive.replace('.safe', ''), decryptedArchive)
-        await tar.list({
-            strict: true,
-            file: archive.replace('.safe', ''),
-            onentry: entry => files.push(entry.path)
-        }).catch(err => {
-            if (err.message.includes('base256')) {
-                Logger.error(`The password you've provided is invalid`)
-                process.exit(1)
-            }
-
-            Logger.error(`The following error has occurred (${err.message})`)
-        })
-
-        Logger.success(`Listing all archive contents for ${archive.replace('.tar.safe', '')}`)
-        for (const file of files) {
-            Logger.view(file)
-        }
-
-        fs.unlinkSync(archive.replace('.safe', ''))
-    },
+    },    
 }
 
 const possibleFlags = [
@@ -194,8 +172,7 @@ const possibleFlags = [
     { name: 'r', length: Infinity },
     { name: 'c', length: Infinity },
     { name: 'v', length: 1 },
-    { name: 'p', length: 1 },
-    { name: 'verbose', length: 0 }
+    { name: 'p', length: 1 }
 ]
 
 let args = []
@@ -235,7 +212,7 @@ if (args.length > 2) {
 }
 
 const settings = {
-    verbose: false
+
 }
 
 if (args.find(a => a.flag != 'p')) {
@@ -253,13 +230,8 @@ if (args.find(a => a.flag == 'p')) {
     })
 }
 
-if (args.find(a => a.flag == 'verbose')) {
-    Object.assign(settings, {
-        verbose: true
-    })
-}
-
 let createdParams = args.find(arg => arg.flag == settings.action).params
+
 functions[settings.action](createdParams.shift(), createdParams)
 
 //todo: configure prompt
