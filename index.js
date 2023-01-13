@@ -163,7 +163,38 @@ const functions = {
     },
     r: async function remove(archive, files) {
 
-    },    
+    },
+    v: async function view(archive) {
+        let files = []
+        archive = ArchiveManager.checkIfExists(archive)
+
+        if (!settings.password)
+            await setPassword()
+
+        let decryptedArchive = aes.decrypt(settings.password, fs.readFileSync(archive))
+
+        fs.writeFileSync(archive.replace('.safe', ''), decryptedArchive)
+
+        if (!(await ArchiveManager.isValid(archive)))
+        {
+            Logger.error(`The password you've provided is invalid`)
+            fs.unlinkSync(archive.replaceAll('.safe', ''))
+            process.exit(1)
+        }
+
+        await tar.list({
+            strict: true,
+            file: archive.replace('.safe', ''),
+            onentry: entry => files.push(entry.path)
+        })
+
+        Logger.success(`Listing all archive contents for ${archive.replace('.tar.safe', '')}`)
+        for (const file of files) {
+            Logger.view(file)
+        }
+
+        fs.unlinkSync(archive.replace('.safe', ''))
+    }  
 }
 
 const possibleFlags = [
@@ -212,7 +243,7 @@ if (args.length > 2) {
 }
 
 const settings = {
-
+    verbose: false
 }
 
 if (args.find(a => a.flag != 'p')) {
