@@ -39,8 +39,16 @@ Extract the archive "example.tar.safe" to the destination "./example":
 
     safe -e example.tar.safe ./example
 
-
 ### Installation
+ #### Linux / MacOS
+ ```sh
+ sudo curl -LJ -o /usr/bin/safe "https://github.com/iQuickDev/Safe/releases/download/v1.0/safe-linux" && sudo chmod 0775 /usr/bin/safe
+ ```
+#### Windows
+- Download the binary (safe-win.exe)
+- Add it to the PATH
+
+### Contributing
 
 #### Clone this repository
 
