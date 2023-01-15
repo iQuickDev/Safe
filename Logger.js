@@ -1,6 +1,12 @@
 require('colors')
 
 module.exports = class Logger {
+
+    static newLine()
+    {
+        console.log()
+    }
+
     static view(message) {
         console.log('  VIEW   '.bold.bgCyan + ` ${message}`.cyan)
     }

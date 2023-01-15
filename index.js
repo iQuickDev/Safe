@@ -3,19 +3,11 @@ const tar = require('tar')
 const fs = require('fs')
 const Logger = require('./Logger.js')
 const ArchiveManager = require('./ArchiveManager.js')
+const crypto = require('crypto')
 require('colors')
 const prompt = require('prompt')
 prompt.message = '  INPUT  '.bold.bgMagenta
 prompt.delimiter = ''
-
-/* FLAGS
-*   -a <archive> <file1> <file2> <fileN>: adds a file to the archive
-*   -e <archive> <destination>: extracts the archive
-*   -r <archive> <file1>: removes a file from the archive
-*   -c <name> <file1> <file2> <fileN>: creates an archive
-*   -v <archive>: view the contents of the archive
-*   -p <password>: provide the archive password
-*/
 
 async function setPassword() {
     prompt.start()
@@ -33,6 +25,7 @@ async function setPassword() {
         }
 
     } catch (e) {
+        Logger.newLine()
         Logger.error("The program was forcefully closed")
         process.exit(1)
     }
@@ -48,24 +41,28 @@ async function setPassword() {
 }
 
 function displayHelp() {
-    console.log('Usage: safe <action> <arg1>, <arg2>...'.cyan)
+    console.log('Usage: safe <action> <arg1> <arg2>...'.cyan)
     console.log('Options:'.yellow)
-    console.log('  -a <archive> <file1> <file2> <fileN>: adds a file to the archive'.green)
-    console.log('  -e <archive> <destination>: extracts the archive'.green)
-    console.log('  -r <archive> <file1>: removes a file from the archive'.green)
     console.log('  -c <name> <file1> <file2> <fileN>: creates an archive'.green)
+    console.log('  -a <archive> <file1> <file2> <fileN>: add a file to the archive'.green)
+    console.log('  -r <archive> <file1> <file2> <fileN>: remove a file from the archive'.green)
+    console.log('  -e <archive> <destination>: extract the archive'.green)
     console.log('  -v <archive>: view the contents of the archive'.green)
     console.log('  -p <password>: provide the archive password'.green)
     console.log('  -h: view this help message\n'.green)
+    console.log(`${'safe'.green.bold} by ${'iQuickDev'.cyan}`)
+    console.log('https://github.com/iQuickDev'.blue)
 }
 
 const functions = {
     c: function create(name, files) {
 
+        let ignoredFiles = []
+
         for (const file of [...files]) {
             if (!fs.existsSync(file)) {
                 files.splice(files.indexOf(file), 1)
-                Logger.warn(`File ${file} will be ignored because it does not exist`)
+                ignoredFiles.push(file)
             }
         }
 
@@ -73,6 +70,11 @@ const functions = {
             Logger.error('Archive could not be created because no files were selected')
             process.exit(1)
         }
+
+        if (ignoredFiles.length == 1)
+        Logger.warn(`File ${ignoredFiles.join(' ')} will be ignored because it does not exist`)
+        else if (ignoredFiles.length > 1)
+        Logger.warn(`Files ${ignoredFiles.join(' ')} will be ignored because they do not exist`)
 
         tar.create({
             gzip: false,
@@ -90,6 +92,7 @@ const functions = {
 
     a: async function add(archive, files) {
         archive = ArchiveManager.checkIfExists(archive)
+        let ignoredFiles = []
 
         if (!settings.password)
             await setPassword()
@@ -100,7 +103,7 @@ const functions = {
         for (const file of [...files]) {
             if (!fs.existsSync(file)) {
                 files.splice(files.indexOf(file), 1)
-                Logger.warn(`File ${file} will be ignored because it does not exist`)
+                ignoredFiles.push(file)
             }
         }
 
@@ -108,6 +111,11 @@ const functions = {
             Logger.error('No file could be added because none was specified')
             process.exit(1)
         }
+
+        if (ignoredFiles.length == 1)
+        Logger.warn(`File ${ignoredFiles.join(' ')} will be ignored because it does not exist`)
+        else if (ignoredFiles.length > 1)
+        Logger.warn(`Files ${ignoredFiles.join(' ')} will be ignored because they do not exist`)
 
         if (!(await ArchiveManager.isValid(archive)))
         {
@@ -163,6 +171,68 @@ const functions = {
     },
     r: async function remove(archive, files) {
 
+        if (files.length == 0)
+        {
+            Logger.error('No files to be removed were specified')
+            return
+        }
+
+        archive = ArchiveManager.checkIfExists(archive)
+        let removedFiles = []
+
+        if (!settings.password)
+            await setPassword()
+
+        let decryptedArchive = aes.decrypt(settings.password, fs.readFileSync(archive))
+        fs.writeFileSync(`${archive.replaceAll('.safe', '.old')}`, decryptedArchive)
+
+        if (!(await ArchiveManager.isValid(archive.replaceAll('.safe', '.old'))))
+        {
+            Logger.error(`The password you've provided is invalid`)
+            fs.unlinkSync(archive.replaceAll('.safe', '.old'))
+            process.exit(1)
+        }
+
+        let tempFolder = crypto.randomUUID()
+        fs.mkdirSync(tempFolder)
+
+        await tar.extract({
+            file: archive.replaceAll('.safe', '.old'),
+            filter: (path) => {
+                let match = files.find(f => f == path)
+                if (match)
+                {
+                    files.splice(files.indexOf(match), 1)
+                    removedFiles.push(match)
+                    return false
+                }
+
+                return true
+            },
+            cwd: `${tempFolder}`
+        })
+
+        fs.unlinkSync(archive)
+
+        await tar.create({
+            gzip: false,
+            file: archive.replaceAll('.safe', '')
+        }, fs.readdirSync(tempFolder))
+
+        let newArchive = archive.replaceAll('.tar.safe', '')
+        fs.writeFileSync(`${newArchive}.tar.safe`, aes.encrypt(settings.password, fs.readFileSync(`${newArchive}.tar`)))
+        fs.unlinkSync(`${newArchive}.tar`)
+
+        fs.rmSync(archive.replaceAll('.safe', '.old'), {recursive: true, force: true})
+        fs.rmSync(tempFolder, {recursive: true, force: true})
+
+        if (files.length == 1)
+        Logger.warn(`The file ${files.join()} could not be removed because it does not exist`)
+        else if (files.length > 1)
+        Logger.warn(`The files ${files.join(' ')} could not be removed because they do not exist`)
+
+        if (removedFiles.length > 0)
+        Logger.success(`Successfully removed ${removedFiles.join(' ')} from archive ${newArchive.bold}`)
     },
     v: async function view(archive) {
         let files = []
@@ -264,5 +334,3 @@ if (args.find(a => a.flag == 'p')) {
 let createdParams = args.find(arg => arg.flag == settings.action).params
 
 functions[settings.action](createdParams.shift(), createdParams)
-
-//todo: configure prompt
