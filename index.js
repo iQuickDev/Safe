@@ -140,7 +140,7 @@ const functions = {
 
         if (!destination) {
             Logger.warn('No destination was specified, defaulting to the current directory')
-            destination = __dirname
+            destination = process.cwd()
         }
 
         if (!fs.existsSync(destination)) {
